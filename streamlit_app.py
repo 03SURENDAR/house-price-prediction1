@@ -47,6 +47,11 @@ if df is not None:
     # Identify numeric & categorical columns
     num_cols = df.select_dtypes(include=np.number).columns.tolist()
     cat_cols = [c for c in df.columns if c not in num_cols]
+    
+    if len(num_cols) == 0:
+        st.error("No numeric columns found in the dataset. Please upload a dataset with numeric features.")
+        st.stop()
+    
     if 'SalePrice' in num_cols:
         default_target_index = num_cols.index('SalePrice')
     else:
@@ -59,10 +64,13 @@ if df is not None:
         st.write(df.describe())
 
     with st.expander('Show Correlation Heatmap'):
-        import plotly.express as px
-        corr = df[num_cols].corr()
-        fig = px.imshow(corr, text_auto=True, aspect='auto', title='Correlation Matrix (Numeric Features)')
-        st.plotly_chart(fig, use_container_width=True)
+        try:
+            import plotly.express as px
+            corr = df[num_cols].corr()
+            fig = px.imshow(corr, text_auto=True, aspect='auto', title='Correlation Matrix (Numeric Features)')
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not generate correlation heatmap: {str(e)}")
 
     # --- Model Training ------------------------------------------------------
     st.header('3. Model Training')
@@ -79,72 +87,98 @@ if df is not None:
 
     train_button = st.button('Train Model')
     if train_button:
-        X = df.drop(columns=[target_col])
-        y = df[target_col]
+        try:
+            X = df.drop(columns=[target_col])
+            y = df[target_col]
+            
+            # Exclude target column from numeric features
+            num_features = [col for col in num_cols if col != target_col]
+            
+            # Handle case where there might be no categorical columns
+            transformers = [('num', StandardScaler(), num_features)]
+            if len(cat_cols) > 0:
+                transformers.append(('cat', OneHotEncoder(handle_unknown='ignore'), cat_cols))
+            
+            preprocessor = ColumnTransformer(
+                transformers,
+                remainder='drop'
+            )
 
-        preprocessor = ColumnTransformer([
-            ('num', StandardScaler(), num_cols),
-            ('cat', OneHotEncoder(handle_unknown='ignore'), cat_cols)
-        ], remainder='drop')
+            if model_choice == 'LinearRegression':
+                model = LinearRegression()
+            elif model_choice == 'Ridge':
+                model = Ridge(alpha=1.0)
+            elif model_choice == 'Lasso':
+                model = Lasso(alpha=0.001)
+            elif model_choice == 'RandomForest':
+                model = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
+            elif model_choice == 'GradientBoosting':
+                model = GradientBoostingRegressor(n_estimators=n_estimators, learning_rate=learning_rate, random_state=42)
+            elif model_choice == 'XGBoost':
+                model = XGBRegressor(n_estimators=n_estimators, learning_rate=learning_rate, objective='reg:squarederror', random_state=42)
 
-        if model_choice == 'LinearRegression':
-            model = LinearRegression()
-        elif model_choice == 'Ridge':
-            model = Ridge(alpha=1.0)
-        elif model_choice == 'Lasso':
-            model = Lasso(alpha=0.001)
-        elif model_choice == 'RandomForest':
-            model = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
-        elif model_choice == 'GradientBoosting':
-            model = GradientBoostingRegressor(n_estimators=n_estimators, learning_rate=learning_rate, random_state=42)
-        elif model_choice == 'XGBoost':
-            model = XGBRegressor(n_estimators=n_estimators, learning_rate=learning_rate, objective='reg:squarederror', random_state=42)
+            pipeline = Pipeline(steps=[('pre', preprocessor), ('model', model)])
 
-        pipeline = Pipeline(steps=[('pre', preprocessor), ('model', model)])
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+            pipeline.fit(X_train, y_train)
+            preds = pipeline.predict(X_test)
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
-        pipeline.fit(X_train, y_train)
-        preds = pipeline.predict(X_test)
+            mae = mean_absolute_error(y_test, preds)
+            mse = mean_squared_error(y_test, preds)
+            rmse = np.sqrt(mse)
+            r2 = r2_score(y_test, preds)
 
-        mae = mean_absolute_error(y_test, preds)
-        mse = mean_squared_error(y_test, preds)
-        rmse = np.sqrt(mse)
-        r2 = r2_score(y_test, preds)
+            st.subheader('Performance Metrics')
+            st.write({'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'R2': r2})
 
-        st.subheader('Performance Metrics')
-        st.write({'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'R2': r2})
+            if hasattr(model, 'feature_importances_'):
+                try:
+                    importances = model.feature_importances_
+                    feat_names = preprocessor.get_feature_names_out()
+                    imp_df = pd.DataFrame({'feature': feat_names, 'importance': importances}).sort_values(by='importance', ascending=False).head(20)
+                    st.subheader('Top Feature Importances')
+                    st.bar_chart(imp_df.set_index('feature'))
+                except Exception as e:
+                    st.warning(f"Could not display feature importances: {str(e)}")
 
-        if hasattr(model, 'feature_importances_'):
-            importances = model.feature_importances_
-            feat_names = preprocessor.get_feature_names_out()
-            imp_df = pd.DataFrame({'feature': feat_names, 'importance': importances}).sort_values(by='importance', ascending=False).head(20)
-            st.subheader('Top Feature Importances')
-            st.bar_chart(imp_df.set_index('feature'))
-
-        # Save the trained pipeline
-        joblib.dump(pipeline, 'house_price_model.pkl')
-        st.success('Model trained and saved as house_price_model.pkl')
+            # Save the trained pipeline
+            joblib.dump(pipeline, 'house_price_model.pkl')
+            st.success('Model trained and saved as house_price_model.pkl')
+            
+        except Exception as e:
+            st.error(f"An error occurred during model training: {str(e)}")
+            st.error("Please check your data and try again.")
 
     # --- Prediction ----------------------------------------------------------
     st.header('4. Predict House Price')
     if os.path.exists('house_price_model.pkl'):
-        pipeline = joblib.load('house_price_model.pkl')
-        st.info('Using saved model for prediction.')
-        with st.form('prediction_form'):
-            st.write('Input features to predict {}:'.format(target_col))
-            input_data = {}
-            for col in num_cols:
-                if col == target_col:
-                    continue
-                val = st.number_input(f'{col}', value=float(df[col].median()))
-                input_data[col] = val
-            for col in cat_cols:
-                val = st.text_input(f'{col}', value=str(df[col].mode()[0]))
-                input_data[col] = val
-            submitted = st.form_submit_button('Predict')
-            if submitted:
-                input_df = pd.DataFrame([input_data])
-                prediction = pipeline.predict(input_df)[0]
-                st.subheader(f'Predicted {target_col}: {prediction:,.2f}')
+        try:
+            pipeline = joblib.load('house_price_model.pkl')
+            st.info('Using saved model for prediction.')
+            with st.form('prediction_form'):
+                st.write('Input features to predict {}:'.format(target_col))
+                input_data = {}
+                
+                # Get numeric features (excluding target)
+                num_features = [col for col in num_cols if col != target_col]
+                
+                for col in num_features:
+                    val = st.number_input(f'{col}', value=float(df[col].median()))
+                    input_data[col] = val
+                
+                for col in cat_cols:
+                    val = st.text_input(f'{col}', value=str(df[col].mode()[0]))
+                    input_data[col] = val
+                
+                submitted = st.form_submit_button('Predict')
+                if submitted:
+                    try:
+                        input_df = pd.DataFrame([input_data])
+                        prediction = pipeline.predict(input_df)[0]
+                        st.subheader(f'Predicted {target_col}: {prediction:,.2f}')
+                    except Exception as e:
+                        st.error(f"Prediction failed: {str(e)}")
+        except Exception as e:
+            st.error(f"Could not load the model: {str(e)}")
     else:
         st.info('Train and save a model to enable predictions.')
