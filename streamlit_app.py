@@ -27,7 +27,7 @@ train a model, inspect metrics & feature importances, then predict prices for ne
 st.sidebar.header('1. Load Dataset')
 data_source = st.sidebar.radio('Choose data source', ('Example dataset from repo', 'Upload CSV'))
 if data_source == 'Example dataset from repo':
-    DATA_URL = 'data/housing.csv'
+    DATA_URL = 'sampledata.csv'
     if os.path.exists(DATA_URL):
         df = pd.read_csv(DATA_URL)
     else:
